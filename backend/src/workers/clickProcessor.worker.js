@@ -15,10 +15,11 @@ const worker = new Worker('click-events', async (job) => {
     const deviceType = parser.getDevice().type || 'desktop';
 
     // 2. Parse IP (GeoIP)
+    // Note: geoip-lite returns null for localhost/private IPs (127.x, 192.168.x, ::1)
     const geo = geoip.lookup(ipAddress) || {};
-    const country = geo.country || 'Unknown';
-    const region = geo.region || 'Unknown';
-    const city = geo.city || 'Unknown';
+    const country = geo.country || null;   // VARCHAR(2) — must be ISO code or NULL
+    const region = geo.region || null;
+    const city = geo.city || null;
 
     // 3. Update total clicks count in links table
     await pool.query('UPDATE links SET clicks_count = clicks_count + 1 WHERE id = $1', [linkId]);

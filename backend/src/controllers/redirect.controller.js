@@ -4,14 +4,15 @@ const clickQueue = require('../queues/click.queue');
 
 const handleRedirect = async (req, res) => {
   const { shortCode } = req.params;
+  console.log(`[REDIRECT] Incoming request for shortCode: ${shortCode}`);
 
   try {
-    // Cache stores JSON with both originalUrl and linkId to avoid an extra DB round-trip on cache hits
     const cached = await CacheService.getUrl(shortCode);
     let originalUrl = null;
     let linkId = null;
 
     if (cached) {
+      console.log(`[REDIRECT] Cache HIT for ${shortCode}:`, cached);
       try {
         const parsed = JSON.parse(cached);
         originalUrl = parsed.originalUrl;
@@ -21,33 +22,36 @@ const handleRedirect = async (req, res) => {
         originalUrl = cached;
       }
     } else {
-      // Cache miss — hit the database
+      console.log(`[REDIRECT] Cache MISS for ${shortCode} — querying DB`);
       const result = await pool.query('SELECT id, original_url FROM links WHERE short_code = $1', [shortCode]);
 
       if (result.rows.length === 0) {
+        console.log(`[REDIRECT] Short code not found in DB: ${shortCode}`);
         return res.status(404).send('URL not found');
       }
 
       originalUrl = result.rows[0].original_url;
       linkId = result.rows[0].id;
+      console.log(`[REDIRECT] Found in DB — linkId: ${linkId}, url: ${originalUrl}`);
 
-      // Populate cache with both fields as JSON
       await CacheService.setUrl(shortCode, JSON.stringify({ originalUrl, linkId }));
+      console.log(`[REDIRECT] Cached successfully`);
     }
 
     if (!originalUrl) {
-       return res.status(404).send('URL not found');
+      return res.status(404).send('URL not found');
     }
 
-    // Redirect the user immediately
+    console.log(`[REDIRECT] Redirecting to: ${originalUrl}`);
     res.redirect(originalUrl);
 
     // ── Post-redirect async work (non-blocking) ──────────────────────────
+    console.log(`[REDIRECT] Post-redirect: linkId=${linkId}, running async tasks...`);
     if (linkId) {
       // 1. Increment the fast Redis click counter immediately (O(1), atomic)
-      CacheService.incrementClickCount(shortCode).catch((err) =>
-        console.error('Failed to increment Redis click count:', err)
-      );
+      CacheService.incrementClickCount(shortCode)
+        .then((count) => console.log(`[REDIRECT] Redis click count for ${shortCode} is now: ${count}`))
+        .catch((err) => console.error('[REDIRECT] Failed to increment Redis click count:', err));
 
       // 2. Queue full analytics processing (geo, UA parsing, Postgres write) via BullMQ
       const clickData = {
@@ -62,7 +66,9 @@ const handleRedirect = async (req, res) => {
       clickQueue.add('processClick', clickData, {
         removeOnComplete: true,
         removeOnFail: false,
-      }).catch((err) => console.error('Failed to queue click event:', err));
+      })
+        .then(() => console.log(`[REDIRECT] Click queued for BullMQ processing`))
+        .catch((err) => console.error('[REDIRECT] Failed to queue click event:', err));
     }
 
   } catch (error) {
@@ -70,6 +76,7 @@ const handleRedirect = async (req, res) => {
     res.status(500).send('Internal Server Error');
   }
 };
+
 
 module.exports = {
   handleRedirect

@@ -27,8 +27,8 @@ const createLink = async (req, res) => {
     const result = await pool.query(insertQuery, [userId, originalUrl, shortCode]);
     const newLink = result.rows[0];
 
-    // 4. Cache in Redis
-    await CacheService.setUrl(shortCode, originalUrl);
+    // 4. Cache in Redis as JSON (must match the format redirect.controller expects)
+    await CacheService.setUrl(shortCode, JSON.stringify({ originalUrl, linkId: newLink.id }));
 
     res.status(201).json(newLink);
   } catch (error) {
